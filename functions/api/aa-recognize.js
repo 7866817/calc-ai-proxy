@@ -1,8 +1,8 @@
 // Cloudflare Pages Function: no-key AI proxy for 小明计算器 AA 分账.
 // POST {text, members} -> {headcount, items:[{name, expr, payer, parts}]}
 // Key order (first that works wins):
-//   1. Server-side Gemini key (secret GEMINI_KEY) -> gemini-3.5-flash-lite
-//   2. Server-side Zhipu key (secret ZHIPU_KEY) -> glm-4.7-flash
+//   1. Server-side Zhipu key (secret ZHIPU_KEY) -> glm-4.7-flash
+//   2. Server-side Gemini key (secret GEMINI_KEY) -> gemini-3.5-flash-lite
 //   3. Workers AI (env.AI, no key needed): qwen / gemma / llama
 // Only callable from the calculator site (and the Android APK, Origin: null).
 const MODELS = ['@cf/qwen/qwen3.8-27b', '@cf/google/gemma-4-26b-a4b-it', '@cf/meta/llama-3.1-8b-instruct-fast'];
@@ -83,7 +83,7 @@ export async function onRequest({ request, env }) {
   const origin = request.headers.get('Origin') || 'null';
   const headers = corsHeaders(origin);
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
-  const reply = (data, status = 200) => Response.json(data, { status, headers });
+  const reply = (data, status = 200, via) => Response.json(data, { status, headers: via ? Object.assign({}, headers, { 'X-AI-Via': via }) : headers });
   if (request.method !== 'POST') return reply({ error: '仅支持 POST' }, 405);
   if (!ALLOWED_ORIGINS.includes(origin)) return reply({ error: '不允许的来源' }, 403);
   const input = await request.json().catch(() => null);
@@ -98,14 +98,16 @@ export async function onRequest({ request, env }) {
     '3. parts 是分摊的人；大家一起、AA、所有人、或没说明时写 ["*"]；“除了X”就列出其余所有人的名字。\n' +
     '4. headcount 是文中提到的总人数（如“6个人AA”），没提到写 null。\n' +
     '5. 名字尽量沿用已有成员。已有成员：' + (members.length ? members.join('、') : '（暂无）');
-  let data = null, aiFailed = false;
-  // 1. Server-side Gemini key (secret GEMINI_KEY in the Pages project)
-  if (env.GEMINI_KEY) {
-    data = await callOpenAI('https://generativelanguage.googleapis.com/v1beta/openai', 'gemini-3.5-flash-lite', env.GEMINI_KEY, sys, input.text);
-  }
-  // 2. Server-side Zhipu key (secret ZHIPU_KEY)
-  if (!data && env.ZHIPU_KEY) {
+  let data = null, aiFailed = false, via = null;
+  // 1. Server-side Zhipu key (secret ZHIPU_KEY in the Pages project)
+  if (env.ZHIPU_KEY) {
     data = await callOpenAI('https://open.bigmodel.cn/api/paas/v4', 'glm-4.7-flash', env.ZHIPU_KEY, sys, input.text);
+    if (data) via = 'zhipu';
+  }
+  // 2. Server-side Gemini key (secret GEMINI_KEY)
+  if (!data && env.GEMINI_KEY) {
+    data = await callOpenAI('https://generativelanguage.googleapis.com/v1beta/openai', 'gemini-3.5-flash-lite', env.GEMINI_KEY, sys, input.text);
+    if (data) via = 'gemini';
   }
   // 3. Workers AI (no key needed)
   if (!data) {
@@ -115,10 +117,10 @@ export async function onRequest({ request, env }) {
         const text = extractText(result);
         const parsed = text ? extractJson(text) : null;
         const norm = parsed ? normalizeData(parsed) : null;
-        if (norm) { data = norm; break; }
+        if (norm) { data = norm; via = 'workers-ai:' + model; break; }
       } catch (e) { aiFailed = true; }
     }
   }
   if (!data) return reply({ error: aiFailed ? 'AI 暂时不可用，请稍后重试' : '没有识别出花费，请换种说法' }, aiFailed ? 503 : 422);
-  return reply(data);
+  return reply(data, 200, via);
 }
