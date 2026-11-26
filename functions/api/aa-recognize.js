@@ -98,15 +98,19 @@ export async function onRequest({ request, env }) {
     '3. parts 是分摊的人；大家一起、AA、所有人、或没说明时写 ["*"]；“除了X”就列出其余所有人的名字。\n' +
     '4. headcount 是文中提到的总人数（如“6个人AA”），没提到写 null。\n' +
     '5. 名字尽量沿用已有成员。已有成员：' + (members.length ? members.join('、') : '（暂无）');
+  // Accept any of the common variable names (dashboard entry may be
+  // ZHIPU_KEY, ZHIPU_API_KEY or zhipu; same for Gemini).
+  const zhipuKey = env.ZHIPU_KEY || env.ZHIPU_API_KEY || env.zhipu;
+  const geminiKey = env.GEMINI_KEY || env.GEMINI_API_KEY || env.gemini;
   let data = null, aiFailed = false, via = null;
-  // 1. Server-side Zhipu key (secret ZHIPU_KEY in the Pages project)
-  if (env.ZHIPU_KEY) {
-    data = await callOpenAI('https://open.bigmodel.cn/api/paas/v4', 'glm-4.7-flash', env.ZHIPU_KEY, sys, input.text);
+  // 1. Server-side Zhipu key
+  if (zhipuKey) {
+    data = await callOpenAI('https://open.bigmodel.cn/api/paas/v4', 'glm-4.7-flash', zhipuKey, sys, input.text);
     if (data) via = 'zhipu';
   }
-  // 2. Server-side Gemini key (secret GEMINI_KEY)
-  if (!data && env.GEMINI_KEY) {
-    data = await callOpenAI('https://generativelanguage.googleapis.com/v1beta/openai', 'gemini-3.5-flash-lite', env.GEMINI_KEY, sys, input.text);
+  // 2. Server-side Gemini key
+  if (!data && geminiKey) {
+    data = await callOpenAI('https://generativelanguage.googleapis.com/v1beta/openai', 'gemini-3.5-flash-lite', geminiKey, sys, input.text);
     if (data) via = 'gemini';
   }
   // 3. Workers AI (no key needed)
