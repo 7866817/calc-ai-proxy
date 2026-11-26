@@ -66,7 +66,7 @@ export async function onRequest({ request, env }) {
     '5. 名字尽量沿用已有成员。已有成员：' + (members.length ? members.join('、') : '（暂无）');
   const debug = url.searchParams.get('debug') === '1';
   const raws = [];
-  let data = null, aiFailed = false;
+  let data = null, aiFailed = false, usedModel = null;
   for (const model of MODELS) {
     try {
       const result = await env.AI.run(model, { messages: [{ role: 'system', content: sys }, { role: 'user', content: input.text }], temperature: 0.1, max_tokens: 1000 });
@@ -82,12 +82,13 @@ export async function onRequest({ request, env }) {
       if (debug) raws.push({ model, text: text.slice(0, 2000), keys: result ? Object.keys(result) : [], respType: result ? typeof result.response : 'none', raw: JSON.stringify(result).slice(0, 1500) });
       const parsed = text ? extractJson(text) : null;
       const norm = parsed ? normalizeData(parsed) : null;
-      if (norm) { data = norm; break; }
+      if (norm) { data = norm; usedModel = model; break; }
     } catch (e) { aiFailed = true; if (debug) raws.push({ model, error: String(e && e.message || e) }); }
   }
   if (!data) {
     if (debug) return reply({ error: 'debug', raws, aiFailed }, 422);
     return reply({ error: aiFailed ? 'AI 暂时不可用，请稍后重试' : '没有识别出花费，请换种说法' }, aiFailed ? 503 : 422);
   }
+  if (debug) return reply(Object.assign({ _model: usedModel, _raws: raws }, data));
   return reply(data);
 }
