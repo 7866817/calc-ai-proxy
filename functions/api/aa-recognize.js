@@ -64,10 +64,10 @@ function normalizeData(d) {
 // http-<status>, timeout, network, bad-json, empty.
 async function callOpenAI(base, model, key, sys, text) {
   key = String(key).trim();
-  // Gemini keys look like AIza... (39 chars). A pasted masked display
-  // (AIza...xxxx) or a truncated copy fails this check without ever
+  // Gemini keys start with AIza... (39 chars) or AQ.... (newer format).
+  // A pasted masked display (AIza...xxxx) fails this check without ever
   // revealing the value.
-  if (/generativelanguage/.test(base) && !/^AIza[0-9A-Za-z_-]{20,}$/.test(key)) return { fail: 'bad-key-format' };
+  if (/generativelanguage/.test(base) && !/^(AIza|AQ\.)[0-9A-Za-z_-]{20,}$/.test(key)) return { fail: 'bad-key-format' };
   const body = { model, temperature: 0.1, messages: [{ role: 'system', content: sys }, { role: 'user', content: text }] };
   if (/bigmodel\.cn/.test(base)) body.thinking = { type: 'disabled' };
   const ctl = new AbortController(), timer = setTimeout(function () { ctl.abort(); }, 30000);
