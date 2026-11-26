@@ -63,6 +63,11 @@ function normalizeData(d) {
 // Returns {data} on success or {fail} with a short reason (never the key):
 // http-<status>, timeout, network, bad-json, empty.
 async function callOpenAI(base, model, key, sys, text) {
+  key = String(key).trim();
+  // Gemini keys look like AIza... (39 chars). A pasted masked display
+  // (AIza...xxxx) or a truncated copy fails this check without ever
+  // revealing the value.
+  if (/generativelanguage/.test(base) && !/^AIza[0-9A-Za-z_-]{20,}$/.test(key)) return { fail: 'bad-key-format' };
   const body = { model, temperature: 0.1, messages: [{ role: 'system', content: sys }, { role: 'user', content: text }] };
   if (/bigmodel\.cn/.test(base)) body.thinking = { type: 'disabled' };
   const ctl = new AbortController(), timer = setTimeout(function () { ctl.abort(); }, 30000);
@@ -73,7 +78,10 @@ async function callOpenAI(base, model, key, sys, text) {
       body: JSON.stringify(body),
     });
     const j = await r.json().catch(function () { return null; });
-    if (!r.ok) return { fail: 'http-' + r.status };
+    if (!r.ok) {
+      const msg = j && j.error && (j.error.message || j.error.code);
+      return { fail: 'http-' + r.status + (msg ? ':' + String(msg).slice(0, 80) : '') };
+    }
     if (!j) return { fail: 'bad-json' };
     const c = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
     if (!c) return { fail: 'empty' };
