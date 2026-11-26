@@ -21,6 +21,19 @@ function extractJson(c) {
   try { return JSON.parse(c.slice(i, j + 1)); } catch (e) { return null; }
 }
 
+// Workers AI returns an OpenAI-style chat completion object:
+// choices[0].message.content holds the text. Some models also (or only)
+// expose result.response as a string or an object. Check in that order.
+function extractText(result) {
+  if (!result) return '';
+  const ch = result.choices && result.choices[0] && result.choices[0].message && result.choices[0].message.content;
+  if (typeof ch === 'string' && ch.trim()) return ch.trim();
+  if (typeof result.response === 'string' && result.response.trim()) return result.response.trim();
+  if (result.response && typeof result.response === 'object') return JSON.stringify(result.response);
+  if (typeof result.text === 'string' && result.text.trim()) return result.text.trim();
+  return '';
+}
+
 // Models often emit expr as a number, or amount/total instead of expr.
 // Coerce everything into the calculator's {name, expr, payer, parts} shape.
 function normalizeData(d) {
@@ -45,7 +58,6 @@ function normalizeData(d) {
 }
 
 export async function onRequest({ request, env }) {
-  const url = new URL(request.url);
   const origin = request.headers.get('Origin') || 'null';
   const headers = corsHeaders(origin);
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
@@ -64,31 +76,16 @@ export async function onRequest({ request, env }) {
     '3. parts 是分摊的人；大家一起、AA、所有人、或没说明时写 ["*"]；“除了X”就列出其余所有人的名字。\n' +
     '4. headcount 是文中提到的总人数（如“6个人AA”），没提到写 null。\n' +
     '5. 名字尽量沿用已有成员。已有成员：' + (members.length ? members.join('、') : '（暂无）');
-  const debug = url.searchParams.get('debug') === '1';
-  const raws = [];
-  let data = null, aiFailed = false, usedModel = null;
+  let data = null, aiFailed = false;
   for (const model of MODELS) {
     try {
       const result = await env.AI.run(model, { messages: [{ role: 'system', content: sys }, { role: 'user', content: input.text }], temperature: 0.1, max_tokens: 1000 });
-      let text = '';
-      if (result) {
-        if (typeof result.response === 'string') text = result.response.trim();
-        else if (result.response && typeof result.response === 'object') {
-          const r = result.response;
-          text = (r.choices && r.choices[0] && r.choices[0].message && r.choices[0].message.content) || r.text || JSON.stringify(r);
-          text = String(text).trim();
-        }
-      }
-      if (debug) raws.push({ model, text: text.slice(0, 2000), keys: result ? Object.keys(result) : [], respType: result ? typeof result.response : 'none', raw: JSON.stringify(result).slice(0, 1500) });
+      const text = extractText(result);
       const parsed = text ? extractJson(text) : null;
       const norm = parsed ? normalizeData(parsed) : null;
-      if (norm) { data = norm; usedModel = model; break; }
-    } catch (e) { aiFailed = true; if (debug) raws.push({ model, error: String(e && e.message || e) }); }
+      if (norm) { data = norm; break; }
+    } catch (e) { aiFailed = true; }
   }
-  if (!data) {
-    if (debug) return reply({ error: 'debug', raws, aiFailed }, 422);
-    return reply({ error: aiFailed ? 'AI 暂时不可用，请稍后重试' : '没有识别出花费，请换种说法' }, aiFailed ? 503 : 422);
-  }
-  if (debug) return reply(Object.assign({ _model: usedModel, _raws: raws }, data));
+  if (!data) return reply({ error: aiFailed ? 'AI 暂时不可用，请稍后重试' : '没有识别出花费，请换种说法' }, aiFailed ? 503 : 422);
   return reply(data);
 }
