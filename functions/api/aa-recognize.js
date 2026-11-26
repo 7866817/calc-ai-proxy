@@ -1,8 +1,8 @@
 // Cloudflare Pages Function: no-key AI proxy for 小明计算器 AA 分账.
 // POST {text, members} -> {headcount, items:[{name, expr, payer, parts}]}
 // Key order (first that works wins):
-//   1. Server-side Zhipu key (secret ZHIPU_KEY) -> glm-4.7-flash
-//   2. Server-side Gemini key (secret GEMINI_KEY) -> gemini-3.5-flash-lite
+//   1. Server-side Gemini key (secret GEMINI_KEY) -> gemini-3.5-flash-lite
+//   2. Server-side Zhipu key (secret ZHIPU_KEY) -> glm-4.7-flash
 //   3. Workers AI (env.AI, no key needed): qwen / gemma / llama
 // Only callable from the calculator site (and the Android APK, Origin: null).
 const MODELS = ['@cf/qwen/qwen3.8-27b', '@cf/google/gemma-4-26b-a4b-it', '@cf/meta/llama-3.1-8b-instruct-fast'];
@@ -103,15 +103,15 @@ export async function onRequest({ request, env }) {
   const zhipuKey = env.ZHIPU_KEY || env.ZHIPU_API_KEY || env.zhipu;
   const geminiKey = env.GEMINI_KEY || env.GEMINI_API_KEY || env.gemini;
   let data = null, aiFailed = false, via = null;
-  // 1. Server-side Zhipu key
-  if (zhipuKey) {
-    data = await callOpenAI('https://open.bigmodel.cn/api/paas/v4', 'glm-4.7-flash', zhipuKey, sys, input.text);
-    if (data) via = 'zhipu';
-  }
-  // 2. Server-side Gemini key
-  if (!data && geminiKey) {
+  // 1. Server-side Gemini key
+  if (geminiKey) {
     data = await callOpenAI('https://generativelanguage.googleapis.com/v1beta/openai', 'gemini-3.5-flash-lite', geminiKey, sys, input.text);
     if (data) via = 'gemini';
+  }
+  // 2. Server-side Zhipu key
+  if (!data && zhipuKey) {
+    data = await callOpenAI('https://open.bigmodel.cn/api/paas/v4', 'glm-4.7-flash', zhipuKey, sys, input.text);
+    if (data) via = 'zhipu';
   }
   // 3. Workers AI (no key needed)
   if (!data) {
