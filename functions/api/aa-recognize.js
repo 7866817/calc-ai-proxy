@@ -60,6 +60,8 @@ function normalizeData(d) {
   return { headcount: typeof d.headcount === 'number' ? d.headcount : null, items };
 }
 
+// Returns {data} on success or {fail} with a short reason (never the key):
+// http-<status>, timeout, network, bad-json, empty.
 async function callOpenAI(base, model, key, sys, text) {
   const body = { model, temperature: 0.1, messages: [{ role: 'system', content: sys }, { role: 'user', content: text }] };
   if (/bigmodel\.cn/.test(base)) body.thinking = { type: 'disabled' };
@@ -71,12 +73,14 @@ async function callOpenAI(base, model, key, sys, text) {
       body: JSON.stringify(body),
     });
     const j = await r.json().catch(function () { return null; });
-    if (!r.ok || !j) return null;
+    if (!r.ok) return { fail: 'http-' + r.status };
+    if (!j) return { fail: 'bad-json' };
     const c = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
-    if (!c) return null;
+    if (!c) return { fail: 'empty' };
     const parsed = extractJson(c);
-    return parsed ? normalizeData(parsed) : null;
-  } catch (e) { return null; } finally { clearTimeout(timer); }
+    const norm = parsed ? normalizeData(parsed) : null;
+    return norm ? { data: norm } : { fail: 'bad-json' };
+  } catch (e) { return { fail: e && e.name === 'AbortError' ? 'timeout' : 'network' }; } finally { clearTimeout(timer); }
 }
 
 export async function onRequest({ request, env }) {
@@ -103,15 +107,16 @@ export async function onRequest({ request, env }) {
   const zhipuKey = env.ZHIPU_KEY || env.ZHIPU_API_KEY || env.zhipu;
   const geminiKey = env.GEMINI_KEY || env.GEMINI_API_KEY || env.gemini;
   let data = null, aiFailed = false, via = null;
+  const fails = {};
   // 1. Server-side Gemini key
   if (geminiKey) {
-    data = await callOpenAI('https://generativelanguage.googleapis.com/v1beta/openai', 'gemini-3.5-flash-lite', geminiKey, sys, input.text);
-    if (data) via = 'gemini';
+    const r1 = await callOpenAI('https://generativelanguage.googleapis.com/v1beta/openai', 'gemini-3.5-flash-lite', geminiKey, sys, input.text);
+    if (r1.data) { data = r1.data; via = 'gemini'; } else fails.gemini = r1.fail;
   }
   // 2. Server-side Zhipu key
   if (!data && zhipuKey) {
-    data = await callOpenAI('https://open.bigmodel.cn/api/paas/v4', 'glm-4.7-flash', zhipuKey, sys, input.text);
-    if (data) via = 'zhipu';
+    const r2 = await callOpenAI('https://open.bigmodel.cn/api/paas/v4', 'glm-4.7-flash', zhipuKey, sys, input.text);
+    if (r2.data) { data = r2.data; via = 'zhipu'; } else fails.zhipu = r2.fail;
   }
   // 3. Workers AI (no key needed)
   if (!data) {
@@ -126,5 +131,9 @@ export async function onRequest({ request, env }) {
     }
   }
   if (!data) return reply({ error: aiFailed ? 'AI 暂时不可用，请稍后重试' : '没有识别出花费，请换种说法' }, aiFailed ? 503 : 422);
-  return reply(data, 200, via);
+  const extra = {};
+  if (fails.gemini) extra['X-AI-Gemini-Fail'] = fails.gemini;
+  if (fails.zhipu) extra['X-AI-Zhipu-Fail'] = fails.zhipu;
+  const h2 = via ? Object.assign({}, headers, { 'X-AI-Via': via }, extra) : headers;
+  return Response.json(data, { status: 200, headers: h2 });
 }
