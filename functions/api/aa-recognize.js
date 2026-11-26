@@ -1,6 +1,9 @@
 // Cloudflare Pages Function: no-key AI proxy for 小明计算器 AA 分账.
 // POST {text, members} -> {headcount, items:[{name, expr, payer, parts}]}
-// Uses Workers AI (env.AI), same extraction prompt as the calculator page.
+// Key order (first that works wins):
+//   1. Server-side Gemini key (secret GEMINI_KEY) -> gemini-3.5-flash-lite
+//   2. Server-side Zhipu key (secret ZHIPU_KEY) -> glm-4.7-flash
+//   3. Workers AI (env.AI, no key needed): qwen / gemma / llama
 // Only callable from the calculator site (and the Android APK, Origin: null).
 const MODELS = ['@cf/qwen/qwen3.8-27b', '@cf/google/gemma-4-26b-a4b-it', '@cf/meta/llama-3.1-8b-instruct-fast'];
 const ALLOWED_ORIGINS = ['https://7866817.github.io', 'null'];
@@ -57,6 +60,25 @@ function normalizeData(d) {
   return { headcount: typeof d.headcount === 'number' ? d.headcount : null, items };
 }
 
+async function callOpenAI(base, model, key, sys, text) {
+  const body = { model, temperature: 0.1, messages: [{ role: 'system', content: sys }, { role: 'user', content: text }] };
+  if (/bigmodel\.cn/.test(base)) body.thinking = { type: 'disabled' };
+  const ctl = new AbortController(), timer = setTimeout(function () { ctl.abort(); }, 30000);
+  try {
+    const r = await fetch(base + '/chat/completions', {
+      method: 'POST', signal: ctl.signal,
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(function () { return null; });
+    if (!r.ok || !j) return null;
+    const c = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+    if (!c) return null;
+    const parsed = extractJson(c);
+    return parsed ? normalizeData(parsed) : null;
+  } catch (e) { return null; } finally { clearTimeout(timer); }
+}
+
 export async function onRequest({ request, env }) {
   const origin = request.headers.get('Origin') || 'null';
   const headers = corsHeaders(origin);
@@ -77,14 +99,25 @@ export async function onRequest({ request, env }) {
     '4. headcount 是文中提到的总人数（如“6个人AA”），没提到写 null。\n' +
     '5. 名字尽量沿用已有成员。已有成员：' + (members.length ? members.join('、') : '（暂无）');
   let data = null, aiFailed = false;
-  for (const model of MODELS) {
-    try {
-      const result = await env.AI.run(model, { messages: [{ role: 'system', content: sys }, { role: 'user', content: input.text }], temperature: 0.1, max_tokens: 1000 });
-      const text = extractText(result);
-      const parsed = text ? extractJson(text) : null;
-      const norm = parsed ? normalizeData(parsed) : null;
-      if (norm) { data = norm; break; }
-    } catch (e) { aiFailed = true; }
+  // 1. Server-side Gemini key (secret GEMINI_KEY in the Pages project)
+  if (env.GEMINI_KEY) {
+    data = await callOpenAI('https://generativelanguage.googleapis.com/v1beta/openai', 'gemini-3.5-flash-lite', env.GEMINI_KEY, sys, input.text);
+  }
+  // 2. Server-side Zhipu key (secret ZHIPU_KEY)
+  if (!data && env.ZHIPU_KEY) {
+    data = await callOpenAI('https://open.bigmodel.cn/api/paas/v4', 'glm-4.7-flash', env.ZHIPU_KEY, sys, input.text);
+  }
+  // 3. Workers AI (no key needed)
+  if (!data) {
+    for (const model of MODELS) {
+      try {
+        const result = await env.AI.run(model, { messages: [{ role: 'system', content: sys }, { role: 'user', content: input.text }], temperature: 0.1, max_tokens: 1000 });
+        const text = extractText(result);
+        const parsed = text ? extractJson(text) : null;
+        const norm = parsed ? normalizeData(parsed) : null;
+        if (norm) { data = norm; break; }
+      } catch (e) { aiFailed = true; }
+    }
   }
   if (!data) return reply({ error: aiFailed ? 'AI 暂时不可用，请稍后重试' : '没有识别出花费，请换种说法' }, aiFailed ? 503 : 422);
   return reply(data);
