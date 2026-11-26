@@ -70,8 +70,16 @@ export async function onRequest({ request, env }) {
   for (const model of MODELS) {
     try {
       const result = await env.AI.run(model, { messages: [{ role: 'system', content: sys }, { role: 'user', content: input.text }], temperature: 0.1, max_tokens: 1000 });
-      const text = result && result.response ? String(result.response).trim() : '';
-      if (debug) raws.push({ model, text: text.slice(0, 2000) });
+      let text = '';
+      if (result) {
+        if (typeof result.response === 'string') text = result.response.trim();
+        else if (result.response && typeof result.response === 'object') {
+          const r = result.response;
+          text = (r.choices && r.choices[0] && r.choices[0].message && r.choices[0].message.content) || r.text || JSON.stringify(r);
+          text = String(text).trim();
+        }
+      }
+      if (debug) raws.push({ model, text: text.slice(0, 2000), keys: result ? Object.keys(result) : [], respType: result ? typeof result.response : 'none', raw: JSON.stringify(result).slice(0, 1500) });
       const parsed = text ? extractJson(text) : null;
       const norm = parsed ? normalizeData(parsed) : null;
       if (norm) { data = norm; break; }
