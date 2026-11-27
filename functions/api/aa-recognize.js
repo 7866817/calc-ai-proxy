@@ -1,5 +1,5 @@
 // Cloudflare Pages Function: no-key AI proxy for 小明计算器 AA 分账.
-// POST {text, members} -> {headcount, items:[{name, expr, payer, parts}]}
+// POST {text, members} -> {headcount, title, items:[{name, expr, payer, parts}]}
 // Key order (first that works wins):
 //   1. Server-side Gemini key (secret GEMINI_KEY) -> gemini-3.5-flash-lite
 //   2. Server-side Zhipu key (secret ZHIPU_KEY) -> glm-4.7-flash
@@ -109,7 +109,8 @@ function normalizeData(d) {
     };
   }).filter(Boolean);
   if (!items.length) return null;
-  return { headcount: typeof d.headcount === 'number' ? d.headcount : null, items };
+  const title = typeof d.title === 'string' && d.title.trim() ? d.title.trim().slice(0, 20) : null;
+  return { headcount: typeof d.headcount === 'number' ? d.headcount : null, title, items };
 }
 
 // Returns {data} on success or {fail} with a short reason (never the key):
@@ -162,12 +163,13 @@ export async function onRequest({ request, env }) {
     return reply({ error: '没有识别出花费，请换种说法' }, 422);
   }
   const sys = '你是 AA 分账记账助手。把用户描述的花费整理成 JSON，只输出 JSON，不要任何解释，不要 markdown。\n' +
-    '格式：{"headcount": 总人数或null, "items": [{"name": "项目名", "expr": "金额算式", "payer": "付款人或null", "parts": ["参与分摊的人"]}]}\n' +
+    '格式：{"title": "简短标题或null", "headcount": 总人数或null, "items": [{"name": "项目名", "expr": "金额算式", "payer": "付款人或null", "parts": ["参与分摊的人"]}]}\n' +
     '规则：\n1. expr 是字符串，只写数字和 + - * / ( )，保留用户写的算式，不要自己心算，例如 "200" 或 "1200/6"。\n' +
     '2. payer 是出钱的人；没说是谁就写 null。\n' +
     '3. parts 是分摊的人；大家一起、AA、所有人、或没说明时写 ["*"]；“除了X”就列出其余所有人的名字。\n' +
     '4. headcount 是文中提到的总人数（如“6个人AA”），没提到写 null。\n' +
-    '5. 名字尽量沿用已有成员。已有成员：' + (members.length ? members.join('、') : '（暂无）');
+    '5. 名字尽量沿用已有成员。已有成员：' + (members.length ? members.join('、') : '（暂无）') + '\n' +
+    '6. title 是这笔分账的简短标题（不超过10个字），根据内容起，比如“火锅”、“周六聚餐”、“大理旅行”；没有明确主题写 null。';
   // Accept any of the common variable names (dashboard entry may be
   // ZHIPU_KEY, ZHIPU_API_KEY or zhipu; same for Gemini).
   const zhipuKey = env.ZHIPU_KEY || env.ZHIPU_API_KEY || env.zhipu;
