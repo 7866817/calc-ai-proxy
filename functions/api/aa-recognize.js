@@ -49,6 +49,13 @@ function normalizeData(d) {
     if ((!expr || !String(expr).trim()) && typeof it.total === 'number' && it.total > 0) expr = String(it.total);
     if ((!expr || !String(expr).trim()) && typeof it.price === 'number' && it.price > 0) expr = String(it.price);
     if (!expr || !String(expr).trim()) return null;
+    // expr must be a numeric expression (digits and + - * / ( ) only)
+    // that evaluates to a positive number; anything else (model echoing
+    // the input text, "待定", ...) is not an amount.
+    expr = String(expr).trim();
+    if (!/^[\d.+\-*/()\s]+$/.test(expr) || !/\d/.test(expr)) return null;
+    try { var _v = Function('return (' + expr + ')')(); if (typeof _v !== 'number' || !isFinite(_v) || _v <= 0) return null; }
+    catch (e) { return null; }
     return {
       name: typeof it.name === 'string' && it.name.trim() ? it.name.trim() : '花费',
       expr: String(expr).trim(),
@@ -70,7 +77,7 @@ async function callOpenAI(base, model, key, sys, text) {
   if (/generativelanguage/.test(base) && !/^(AIza|AQ\.)[0-9A-Za-z_-]{20,}$/.test(key)) return { fail: 'bad-key-format(len=' + key.length + ',prefix=' + key.slice(0, 4) + ')' };
   const body = { model, temperature: 0.1, messages: [{ role: 'system', content: sys }, { role: 'user', content: text }] };
   if (/bigmodel\.cn/.test(base)) body.thinking = { type: 'disabled' };
-  const ctl = new AbortController(), timer = setTimeout(function () { ctl.abort(); }, 30000);
+  const ctl = new AbortController(), timer = setTimeout(function () { ctl.abort(); }, 15000);
   try {
     const r = await fetch(base + '/chat/completions', {
       method: 'POST', signal: ctl.signal,
@@ -138,7 +145,14 @@ export async function onRequest({ request, env }) {
       } catch (e) { aiFailed = true; }
     }
   }
-  if (!data) return reply({ error: aiFailed ? 'AI 暂时不可用，请稍后重试' : '没有识别出花费，请换种说法' }, aiFailed ? 503 : 422);
+  if (!data) {
+    const eh = {};
+    if (fails.gemini) eh['X-AI-Gemini-Fail'] = fails.gemini;
+    if (fails.zhipu) eh['X-AI-Zhipu-Fail'] = fails.zhipu;
+    const status = aiFailed ? 503 : 422;
+    return Response.json({ error: aiFailed ? 'AI 暂时不可用，请稍后重试' : '没有识别出花费，请换种说法' },
+      { status, headers: Object.assign({}, headers, eh) });
+  }
   const extra = {};
   if (fails.gemini) extra['X-AI-Gemini-Fail'] = fails.gemini;
   if (fails.zhipu) extra['X-AI-Zhipu-Fail'] = fails.zhipu;
