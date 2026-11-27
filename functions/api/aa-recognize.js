@@ -155,6 +155,12 @@ export async function onRequest({ request, env }) {
     return reply({ error: '输入限 1 至 1600 字' }, 400);
   }
   const members = Array.isArray(input.members) ? input.members.filter(function (n) { return typeof n === 'string' && n; }).slice(0, 30) : [];
+  // No digits and no Chinese numerals -> no amount to recognize. Fail fast
+  // instead of burning every backend (a no-amount input turns into a
+  // scary 503 whenever Workers AI is rate-limited).
+  if (!/[\d零一二三四五六七八九十百千萬万两]/.test(input.text)) {
+    return reply({ error: '没有识别出花费，请换种说法' }, 422);
+  }
   const sys = '你是 AA 分账记账助手。把用户描述的花费整理成 JSON，只输出 JSON，不要任何解释，不要 markdown。\n' +
     '格式：{"headcount": 总人数或null, "items": [{"name": "项目名", "expr": "金额算式", "payer": "付款人或null", "parts": ["参与分摊的人"]}]}\n' +
     '规则：\n1. expr 是字符串，只写数字和 + - * / ( )，保留用户写的算式，不要自己心算，例如 "200" 或 "1200/6"。\n' +
