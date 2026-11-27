@@ -39,6 +39,51 @@ function extractText(result) {
 
 // Models often emit expr as a number, or amount/total instead of expr.
 // Coerce everything into the calculator's {name, expr, payer, parts} shape.
+// Safe arithmetic evaluator (no eval/Function: Workers forbids code
+// generation from strings). expr is pre-validated to digits and
+// + - * / ( ) . and whitespace only.
+function evalExpr(s) {
+  var i = 0;
+  function skipWs() { while (s[i] === ' ' || s[i] === '\t') i++; }
+  function parseNum() {
+    skipWs();
+    var start = i;
+    while (/[\d.]/.test(s[i] || '')) i++;
+    if (i === start) return NaN;
+    return parseFloat(s.slice(start, i));
+  }
+  function parseFactor() {
+    skipWs();
+    if (s[i] === '(') { i++; var v = parseAdd(); skipWs(); if (s[i] !== ')') return NaN; i++; return v; }
+    if (s[i] === '-') { i++; return -parseFactor(); }
+    if (s[i] === '+') { i++; return parseFactor(); }
+    return parseNum();
+  }
+  function parseMul() {
+    var v = parseFactor();
+    for (;;) {
+      skipWs();
+      if (s[i] === '*') { i++; v *= parseFactor(); }
+      else if (s[i] === '/') { i++; var d = parseFactor(); if (d === 0) return NaN; v /= d; }
+      else break;
+    }
+    return v;
+  }
+  function parseAdd() {
+    var v = parseMul();
+    for (;;) {
+      skipWs();
+      if (s[i] === '+') { i++; v += parseMul(); }
+      else if (s[i] === '-') { i++; v -= parseMul(); }
+      else break;
+    }
+    return v;
+  }
+  var v = parseAdd();
+  skipWs();
+  return i === s.length ? v : NaN;
+}
+
 function normalizeData(d) {
   if (!d || !Array.isArray(d.items) || !d.items.length) return null;
   const items = d.items.map(function (it) {
@@ -54,8 +99,8 @@ function normalizeData(d) {
     // the input text, "待定", ...) is not an amount.
     expr = String(expr).trim();
     if (!/^[\d.+\-*/()\s]+$/.test(expr) || !/\d/.test(expr)) return null;
-    try { var _v = Function('return (' + expr + ')')(); if (typeof _v !== 'number' || !isFinite(_v) || _v <= 0) return null; }
-    catch (e) { return null; }
+    var _v = evalExpr(expr);
+    if (typeof _v !== 'number' || !isFinite(_v) || _v <= 0) return null;
     return {
       name: typeof it.name === 'string' && it.name.trim() ? it.name.trim() : '花费',
       expr: String(expr).trim(),
